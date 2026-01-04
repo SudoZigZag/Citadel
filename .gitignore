@@ -1,0 +1,6 @@
+buzzer_secret.h
+secrets.py
+*.caffemodel
+*.prototxt
+vault/
+__pycache__/
