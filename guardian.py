@@ -6,6 +6,7 @@ import subprocess
 import os
 import time
 from datetime import datetime
+import pathlib
 import secrets
 
 TOKEN = secrets.TOKEN
@@ -20,8 +21,9 @@ last_alert_time=0
 alert_cooldown=30
 
 
-proto_path = "/home/raiyer/citadel/deploy.prototxt"
-model_path = "/home/raiyer/citadel/mobilenet_iter_73000.caffemodel"
+proto_path = Path.home() / "citadel" / "deploy.prototxt"
+model_path = Path.home() / "citadel" / "mobilenet_iter_73000.caffemodel"
+
 net = cv2.dnn.readNetFromCaffe(proto_path, model_path)
 
 print("Citadel AI is watching via Pi 5 Native Camera...")
@@ -69,7 +71,7 @@ while True:
             # --- ACTION START ---
             # A. Save local evidence
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            photo_path = f"/home/raiyer/citadel/vault/intruder_{timestamp}.jpg"
+            photo_path = Path.home() / "citadel" / "vault" / f"intruder_{timestamp}.jpg"
             cv2.imwrite(photo_path, frame)
 
             # B. Trigger Telegram & Siren
