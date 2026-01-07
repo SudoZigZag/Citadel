@@ -8,6 +8,8 @@ import time
 from datetime import datetime
 import pathlib
 import secrets
+from pathlib import Path
+
 
 TOKEN = secrets.TOKEN
 CHAT_ID = secrets.CHAT_ID
