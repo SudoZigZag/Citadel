@@ -10,7 +10,6 @@ import pathlib
 import secrets
 from pathlib import Path
 
-
 TOKEN = secrets.TOKEN
 CHAT_ID = secrets.CHAT_ID
 # 1. Raise Threshold (0.6 is the 'sweet spot' for outdoors)
@@ -21,7 +20,10 @@ CONFIDENCE_THRESHOLD = 0.4
 detection_counter = 0
 last_alert_time=0
 alert_cooldown=30
-
+# --- ADD AT THE TOP WITH OTHER SETTINGS ---
+last_heartbeat_time = 0
+HEARTBEAT_INTERVAL = 3600  # 3600 seconds = 1 hour
+CRITICAL_VOLTAGE = 3.70    # Alert us immediately if it hits this
 
 proto_path = Path.home() / "citadel" / "deploy.prototxt"
 model_path = Path.home() / "citadel" / "mobilenet_iter_73000.caffemodel"
@@ -106,6 +108,38 @@ while True:
     cv2.imshow("Citadel Vision", frame)
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
+    # --- BATTERY HEARTBEAT LOGIC ---
+    current_time = time.time()
+    
+    if (current_time - last_heartbeat_time) > HEARTBEAT_INTERVAL:
+        try:
+            # We call the Scout's status endpoint (we'll make sure Ravi has this ready)
+            r = requests.get("http://citadel1.local/status", timeout=3.0)
+            
+            if r.status_code == 200:
+                data = r.json()
+                v = data.get('Voltage', 0)
+                health = data.get('Battery_Health', "Unknown")
+                
+                print(f"📡 Heartbeat: Scout is at {v}V ({health})")
+                
+                # 1. Always send an hourly update
+                status_msg = f"🛡️ Citadel Status Update\n🔋 Battery: {v}V\n✅ System: Online"
+                url = f"https://api.telegram.org/bot{TOKEN}/sendMessage?chat_id={CHAT_ID}&text={status_msg}"
+                requests.get(url)
+                
+                # 2. EMERGENCY ALERT: If battery is too low, send an extra warning
+                if v < CRITICAL_VOLTAGE:
+                    emergency_msg = f"⚠️ CRITICAL: Scout battery is low ({v}V)! Please charge Ravi's D1 Mini."
+                    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage?chat_id={CHAT_ID}&text={emergency_msg}"
+                    requests.get(url)
+
+                last_heartbeat_time = current_time # Reset the 1-hour timer
+                
+        except Exception as e:
+            print(f"📡 Heartbeat Failed: Scout is offline or unreachable. Error: {e}")
+            # We don't reset the timer here so it tries again on the next loop 
+            # until it successfully finds the Scout.
 
 cv2.destroyAllWindows()
 

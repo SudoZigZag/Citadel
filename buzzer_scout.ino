@@ -2,12 +2,22 @@
 #include <ESP8266WebServer.h>
 #include <ESP8266mDNS.h>
 #include "buzzer_secret.h"
+#include <ArduinoOTA.h>
 
-char ssid[] = SECRET_SSID
+char ssid[] = SECRET_SSID;
 char password[] = SECRET_PASS;
 
 ESP8266WebServer server(80);
 const int relayPin = 5; // This is D1 on the D1 Mini
+
+
+enum ScoutMode { GUARDIAN, MAINTENANCE, ALERT };
+ScoutMode currentMode = GUARDIAN;
+
+
+unsigned long maintenanceStartTime = 0;
+const long MAINTENANCE_TIMEOUT = 180000; // 3 minutes in milliseconds
+
 
 // In the D1 Mini Code
 void handleScream() {
@@ -23,7 +33,7 @@ void handleScream() {
   String telemetry = "{";
   telemetry += "\"status\": \"ALARM_TRIGGERED\",";
   telemetry += "\"voltage\": " + String(voltage, 2) + ",";
-  telemetry += "\"battery_health\": \"" + health + "\",";
+  telemetry += "\"Battery_Health\": \"" + health + "\",";
   telemetry += "\"rssi\": " + String(WiFi.RSSI()); // Signal strength!
   telemetry += "}";
 
@@ -35,7 +45,16 @@ void handleScream() {
   Serial.print("done screaming");
 }
 
-
+void handleMaintenance() {
+  currentMode = MAINTENANCE;
+  maintenanceStartTime = millis();
+  
+  // Disable Sleep to ensure a stable connection
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);
+  
+  server.send(200, "text/plain", "Maintenance Mode Active. Waiting 3 mins for OTA...");
+  Serial.println("Entering OTA Maintenance Mode...");
+}
 
 float getBatteryVoltage() {
   int raw = analogRead(A0);
@@ -50,10 +69,16 @@ float getBatteryVoltage() {
 
 // In your handleScream or a new handleStatus function:
 void handleStatus() {
-  float v = getBatteryVoltage();
-  String message = "Battery: " + String(v) + "V";
-  server.send(200, "text/plain", message);
+  float voltage = getBatteryVoltage();
+  String health = (voltage > 3.7) ? "OK" : "LOW";
+
+  String json = "{";
+  json += "\"Voltage\": " + String(voltage, 2) + ",";
+  json += "\"Battery_Health\": \"" + health + "\"";
+  json += "}";
+  server.send(200, "application/json", json);
 }
+
 
 void setup() {
   Serial.begin(115200);
@@ -93,13 +118,35 @@ void setup() {
   // Define your endpoints
   server.on("/scream", handleScream);
   server.on("/status", handleStatus);
-  server.begin();
-  
+  server.on("/maintenance", handleMaintenance);
+
   server.begin();
 }
 
 void loop() {
-  MDNS.update();
-  server.handleClient();
-  delay(200);
+  switch (currentMode) {
+    case MAINTENANCE:
+      ArduinoOTA.setHostname("citadel-scout1.local");
+      ArduinoOTA.setPassword("abcd");
+      ArduinoOTA.begin();
+      ArduinoOTA.handle();
+      server.handleClient();
+      
+      if (millis() - maintenanceStartTime > MAINTENANCE_TIMEOUT) {
+        ESP.restart(); // Back to clean Guardian mode
+      }
+      break;
+
+    case GUARDIAN:
+      MDNS.update();
+      server.handleClient();
+      //ArduinoOTA.handle(); // You can still keep this here, but it might be laggy
+      delay(200);
+      // Regular power-saving logic
+      break;
+
+    case ALERT:
+      // Future logic for siren sequences
+      break;
+  }
 }
