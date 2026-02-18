@@ -32,6 +32,13 @@ net = cv2.dnn.readNetFromCaffe(proto_path, model_path)
 
 print("Citadel AI is watching via Pi 5 Native Camera...")
 last_processed_id = 0
+# A list of all your "Employees"
+# Add this at the top with your other variables
+DEVICES = {
+    "/scout1": "http://citadel1.local/status",
+    "/garage": "http://citadel2.local/status",
+    "/frontdoor": "http://citadel3.local/status"
+}
 while True:
     # 1. Grab a frame
     result = subprocess.run(["rpicam-still", "-t", "10", "--immediate", "-n", "-o", "/dev/shm/frame.jpg", "--width", "640", "--height", "480", "--shutter", "20000"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -120,14 +127,14 @@ while True:
                 data = r.json()
                 v = data.get('Voltage', 0)
                 health = data.get('Battery_Health', "Unknown")
-                
+
                 print(f"📡 Heartbeat: Scout is at {v}V ({health})")
-                
+
                 # 1. Always send an hourly update
                 status_msg = f"🛡️ Citadel Status Update\n🔋 Battery: {v}V\n✅ System: Online"
                 url = f"https://api.telegram.org/bot{TOKEN}/sendMessage?chat_id={CHAT_ID}&text={status_msg}"
                 requests.get(url)
-                
+
                 # 2. EMERGENCY ALERT: If battery is too low, send an extra warning
                 if v < CRITICAL_VOLTAGE:
                     emergency_msg = f"⚠️ CRITICAL: Scout battery is low ({v}V)! Please charge Ravi's D1 Mini."
@@ -135,46 +142,61 @@ while True:
                     requests.get(url)
 
                 last_heartbeat_time = current_time # Reset the 1-hour timer
-                
+
         except Exception as e:
             print(f"📡 Heartbeat Failed: Scout is offline or unreachable. Error: {e}")
             # We don't reset the timer here so it tries again on the next loop 
             # until it successfully finds the Scout.
 
-    # --- NEW: TELEGRAM COMMAND LISTENER ---
+# --- SMART ON-DEMAND LISTENER ---
     try:
-        # 1. Ask Telegram: "Did Meera send any new messages?"
-        # offset=-1 tells Telegram we only want the very last message sent
+        # 1. Ask Telegram: "What did Meera last say?"
         update_url = f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset=-1"
         response = requests.get(update_url, timeout=2.0).json()
 
         if response.get("result"):
             last_update = response["result"][-1]
-            message_text = last_update.get("message", {}).get("text", "")
+            msg_text = last_update.get("message", {}).get("text", "").lower()
             update_id = last_update.get("update_id")
 
-            # 2. Check if the message is the command "/status"
-            # We also check the update_id to make sure we don't reply to the same message twice
-            if message_text.lower() == "/status" and update_id != last_processed_id:
-                print("📥 Meera requested an on-demand status update!")
-                
-                # 3. Get the battery status right now
-                r = requests.get("http://citadel1.local/status", timeout=3.0)
-                data = r.json()
-                v = data.get('Voltage', 0)
-                
-                # 4. Send the reply back to you
-                reply = f"📊 On-Demand Report\n🔋 Battery: {v}V\n✅ All systems normal."
-                send_url = f"https://api.telegram.org/bot{TOKEN}/sendMessage?chat_id={CHAT_ID}&text={reply}"
-                requests.get(send_url)
-                
-                # Record this update_id so we don't keep replying to it
+            # 2. Only act if this is a NEW message we haven't answered yet
+            if update_id != last_processed_id:
+
+                # We check the command and pick the right URL
+                target_url = None
+                device_name = ""
+
+                if msg_text == "/scout1":
+                    target_url = "http://citadel1.local/status"
+                    device_name = "Scout 1"
+                elif msg_text == "/garage":
+                    target_url = "http://citadel2.local/status"
+                    device_name = "Garage Camera"
+                elif msg_text == "/frontdoor":
+                    target_url = "http://citadel3.local/status"
+                    device_name = "Front Door"
+
+                # 3. If we recognized the command, go get that specific battery level
+                if target_url:
+                    print(f"🔍 Fetching {device_name} battery for Meera...")
+                    try:
+                        r = requests.get(target_url, timeout=3.0)
+                        val = r.json().get('Voltage', 0)
+
+                        reply = f"🔋 {device_name} Status\nBattery: {val}V\n✅ All clear!"
+                        send_url = f"https://api.telegram.org/bot{TOKEN}/sendMessage?chat_id={CHAT_ID}&text={reply}"
+                        requests.get(send_url)
+                    except:
+                        # Tell Meera if THAT specific device is offline
+                        err_msg = f"❌ {device_name} is currently offline."
+                        requests.get(f"https://api.telegram.org/bot{TOKEN}/sendMessage?chat_id={CHAT_ID}&text={err_msg}")
+
+                # Mark as "Done" so we don't reply twice
                 last_processed_id = update_id
 
     except Exception as e:
-        # If the internet flickers, we just skip this check and try again next loop
+        # If internet is down, just wait for the next loop
         pass
-
     # IMPORTANT: Keep a small sleep so the CPU doesn't get too hot!
     time.sleep(2)
 
