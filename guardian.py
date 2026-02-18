@@ -31,7 +31,7 @@ model_path = Path.home() / "citadel" / "mobilenet_iter_73000.caffemodel"
 net = cv2.dnn.readNetFromCaffe(proto_path, model_path)
 
 print("Citadel AI is watching via Pi 5 Native Camera...")
-
+last_processed_id = 0
 while True:
     # 1. Grab a frame
     result = subprocess.run(["rpicam-still", "-t", "10", "--immediate", "-n", "-o", "/dev/shm/frame.jpg", "--width", "640", "--height", "480", "--shutter", "20000"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -140,6 +140,43 @@ while True:
             print(f"📡 Heartbeat Failed: Scout is offline or unreachable. Error: {e}")
             # We don't reset the timer here so it tries again on the next loop 
             # until it successfully finds the Scout.
+
+    # --- NEW: TELEGRAM COMMAND LISTENER ---
+    try:
+        # 1. Ask Telegram: "Did Meera send any new messages?"
+        # offset=-1 tells Telegram we only want the very last message sent
+        update_url = f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset=-1"
+        response = requests.get(update_url, timeout=2.0).json()
+
+        if response.get("result"):
+            last_update = response["result"][-1]
+            message_text = last_update.get("message", {}).get("text", "")
+            update_id = last_update.get("update_id")
+
+            # 2. Check if the message is the command "/status"
+            # We also check the update_id to make sure we don't reply to the same message twice
+            if message_text.lower() == "/status" and update_id != last_processed_id:
+                print("📥 Meera requested an on-demand status update!")
+                
+                # 3. Get the battery status right now
+                r = requests.get("http://citadel1.local/status", timeout=3.0)
+                data = r.json()
+                v = data.get('Voltage', 0)
+                
+                # 4. Send the reply back to you
+                reply = f"📊 On-Demand Report\n🔋 Battery: {v}V\n✅ All systems normal."
+                send_url = f"https://api.telegram.org/bot{TOKEN}/sendMessage?chat_id={CHAT_ID}&text={reply}"
+                requests.get(send_url)
+                
+                # Record this update_id so we don't keep replying to it
+                last_processed_id = update_id
+
+    except Exception as e:
+        # If the internet flickers, we just skip this check and try again next loop
+        pass
+
+    # IMPORTANT: Keep a small sleep so the CPU doesn't get too hot!
+    time.sleep(2)
 
 cv2.destroyAllWindows()
 
