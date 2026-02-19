@@ -34,10 +34,19 @@ print("Citadel AI is watching via Pi 5 Native Camera...")
 last_processed_id = 0
 # A list of all your "Employees"
 # Add this at the top with your other variables
-DEVICES = {
-    "/scout1": "http://citadel1.local/status",
-    "/garage": "http://citadel2.local/status",
-    "/frontdoor": "http://citadel3.local/status"
+CITADEL_DEVICES = {
+    "/scout1": {
+        "url": "http://citadel1.local",
+        "commands": ["status", "buzz"]
+    },
+    "/garage": {
+        "url": "http://citadel2.local",
+        "commands": ["status", "open", "close"]
+    },
+    "/frontdoor": {
+        "url": "http://citadel3.local",
+        "commands": ["status", "photo"]
+    }
 }
 while True:
     # 1. Grab a frame
@@ -148,55 +157,55 @@ while True:
             # We don't reset the timer here so it tries again on the next loop 
             # until it successfully finds the Scout.
 
-# --- SMART ON-DEMAND LISTENER ---
     try:
-        # 1. Ask Telegram: "What did Meera last say?"
         update_url = f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset=-1"
         response = requests.get(update_url, timeout=2.0).json()
 
         if response.get("result"):
             last_update = response["result"][-1]
-            msg_text = last_update.get("message", {}).get("text", "").lower()
+            msg_text = last_update.get("message", {}).get("text", "").lower().strip()
             update_id = last_update.get("update_id")
 
-            # 2. Only act if this is a NEW message we haven't answered yet
             if update_id != last_processed_id:
+                words = msg_text.split()
+                device_cmd = words[0] # e.g., /scout1
+                action = words[1] if len(words) > 1 else "status" # default to status
 
-                # We check the command and pick the right URL
-                target_url = None
-                device_name = ""
+                # RULE 6: Does the device exist?
+                if device_cmd in CITADEL_DEVICES:
+                    device_info = CITADEL_DEVICES[device_cmd]
+                    
+               # RULE 4: Perform the task
+                    if action in device_info["commands"]:
+                        target_url = f"{device_info['url']}/{action}"
+                        
+                        try:
+                            r = requests.get(target_url, timeout=3.0)
+                            
+                            # --- SPECIAL CHECK FOR STATUS ---
+                            if action == "status":
+                                # We get the data from the Scout and show it to you
+                                data = r.json()
+                                v = data.get('Voltage', 0)
+                                reply = f"🔋 {device_cmd} Status\nVoltage: {v}V\n✅ Online"
+                            else:
+                                # For actions like 'buzz', we just confirm it worked
+                                reply = f"✅ {device_cmd}: {action.capitalize()} command sent!"
+                                
+                        except Exception as e:
+                            reply = f"❌ Error: Could not reach {device_cmd} at {target_url}" 
+                else:
+                    # RULE 6: WRONG DEVICE: Send list of all devices
+                    all_devices = ", ".join(CITADEL_DEVICES.keys())
+                    reply = f"🚫 Device '{device_cmd}' not found.\nAvailable: {all_devices}"
 
-                if msg_text == "/scout1":
-                    target_url = "http://citadel1.local/status"
-                    device_name = "Scout 1"
-                elif msg_text == "/garage":
-                    target_url = "http://citadel2.local/status"
-                    device_name = "Garage Camera"
-                elif msg_text == "/frontdoor":
-                    target_url = "http://citadel3.local/status"
-                    device_name = "Front Door"
-
-                # 3. If we recognized the command, go get that specific battery level
-                if target_url:
-                    print(f"🔍 Fetching {device_name} battery for Meera...")
-                    try:
-                        r = requests.get(target_url, timeout=3.0)
-                        val = r.json().get('Voltage', 0)
-
-                        reply = f"🔋 {device_name} Status\nBattery: {val}V\n✅ All clear!"
-                        send_url = f"https://api.telegram.org/bot{TOKEN}/sendMessage?chat_id={CHAT_ID}&text={reply}"
-                        requests.get(send_url)
-                    except:
-                        # Tell Meera if THAT specific device is offline
-                        err_msg = f"❌ {device_name} is currently offline."
-                        requests.get(f"https://api.telegram.org/bot{TOKEN}/sendMessage?chat_id={CHAT_ID}&text={err_msg}")
-
-                # Mark as "Done" so we don't reply twice
+                # Send the final response to Telegram
+                send_url = f"https://api.telegram.org/bot{TOKEN}/sendMessage?chat_id={CHAT_ID}&text={reply}"
+                requests.get(send_url)
                 last_processed_id = update_id
 
     except Exception as e:
-        # If internet is down, just wait for the next loop
-        pass
+        print(f"System Error: {e}")
     # IMPORTANT: Keep a small sleep so the CPU doesn't get too hot!
     time.sleep(2)
 
